@@ -149,7 +149,7 @@ func MatrixMul(a *Matrix, b *Matrix) *Matrix {
 	aCols := C.size_t(a.Cols)
 	bCols := C.size_t(b.Cols)
 
-	C.matMul(outPtr, aPtr, bPtr, aRows, aCols, bCols)
+	matMulBackend(outPtr, aPtr, bPtr, aRows, aCols, bCols)
 
 	return out
 }

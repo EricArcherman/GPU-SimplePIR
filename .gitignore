@@ -1,0 +1,3 @@
+upstream-simplepir/
+gpu/build/
+third_party/cutlass/
