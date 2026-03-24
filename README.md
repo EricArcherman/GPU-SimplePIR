@@ -118,7 +118,7 @@ LOG_N=36 D=1 go test -bench DoublePirSingle -timeout 0 -run=^$
 
 ## GPU acceleration (CUTLASS prototype)
 
-This repository includes an initial NVIDIA GPU backend for the large 32-bit matrix multiply used by SimplePIR setup/query (`MatrixMul` -> `matMul`). The backend is optional and uses [NVIDIA CUTLASS](https://github.com/NVIDIA/cutlass) for GEMM on CUDA GPUs.
+This repository includes an optional NVIDIA GPU backend for SimplePIR’s 32-bit dense matrix multiplies: `MatrixMul` / `matMul` and `MatrixMulVec` (column-vector multiply), implemented with [NVIDIA CUTLASS](https://github.com/NVIDIA/cutlass). Device buffers are pooled and grown as needed so repeated GEMMs avoid per-call `cudaMalloc`. Optional CUDA packed `MatrixMulVecPacked` (`SIMPLEPIR_GPU_PACKED_ANSWER=1`) and **device-resident squished DB** (`SIMPLEPIR_GPU_PACKED_DB_RESIDENT=1`, upload once after `Squish`) are in `gpu/matmul_packed_gpu.cu`. `matMulTransposedPacked` remains CPU-only.
 
 ### Build the CUTLASS bridge library
 
@@ -142,3 +142,17 @@ go test -tags cutlass ./pir
 ```
 
 If the GPU path fails at runtime (for example, CUDA not available), code falls back to the existing CPU implementation.
+
+Optional tuning:
+
+- `SIMPLEPIR_CUTLASS_MIN_OPS` — minimum product `aRows * aCols * bCols` before using CUTLASS (default `0`, i.e. always try GPU when `SIMPLEPIR_USE_CUTLASS=1`). Set e.g. `1000000` to skip tiny problems and reduce kernel launch overhead.
+
+**Device-resident factors (CUTLASS):** the bridge also exposes `CutlassPersist` in `pir/cutlass_persist.go` to keep `A` or `DB+A` on the GPU between repeated GEMMs (same math as `simplepir_matmul_cutlass_u32`, less PCIe per query). Benchmark: `SIMPLEPIR_USE_CUTLASS=1 go test -tags cutlass -bench BenchmarkCutlassResidentGEMM -run ^$`. Env `CUTLASS_BENCH_M`, `CUTLASS_BENCH_N`, `CUTLASS_BENCH_L`, `CUTLASS_BENCH_M2`, `CUTLASS_BENCH_N2` override default matrix sizes.
+
+**Server-side resident `A` in SimplePIR.Query:** with `-tags cutlass`, set `SIMPLEPIR_USE_CUTLASS=1` and `SIMPLEPIR_CUTLASS_RESIDENT_A=1` so the public matrix `A` stays on the GPU between queries and each `Query` only uploads the secret vector for `A·secret` (same semantics as plain CUTLASS when `b.Rows == a.Cols`). Compare: `go test -tags cutlass -bench BenchmarkSimplePIRServerQuery -run ^$`.
+
+**Packed Answer on GPU + resident squished DB:** set `SIMPLEPIR_GPU_PACKED_ANSWER=1` and optionally `SIMPLEPIR_GPU_PACKED_DB_RESIDENT=1` (upload full squished `DB.Data` once after `Squish`). End-to-end: `go test -tags cutlass -bench BenchmarkSimplePIROnlineServer -run ^$`. See `gpu/README.md`.
+
+### Naive GPU end-to-end mock (benchmark vs Go)
+
+The `gpu/` build includes `libsimplepir_naive.a`, an uncompressed GEMM/GEMV pipeline used only for timing experiments. See `gpu/README.md` for `go test -tags cuda_e2e -bench BenchmarkNaiveGPUVsSimplePIR` (compares GPU mock to real `Answer()` on squished data).
