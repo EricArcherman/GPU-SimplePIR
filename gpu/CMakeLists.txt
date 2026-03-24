@@ -20,6 +20,7 @@ target_include_directories(simplepir_cutlass
 set_target_properties(simplepir_cutlass PROPERTIES
   CXX_STANDARD 17
   CUDA_STANDARD 17
-  CUDA_SEPARABLE_COMPILATION ON
+  # OFF so libsimplepir_cutlass.a links under plain gcc/cgo without a separate device link step.
+  CUDA_SEPARABLE_COMPILATION OFF
   POSITION_INDEPENDENT_CODE ON
 )
