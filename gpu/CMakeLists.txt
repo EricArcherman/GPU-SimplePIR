@@ -24,3 +24,13 @@ set_target_properties(simplepir_cutlass PROPERTIES
   CUDA_SEPARABLE_COMPILATION OFF
   POSITION_INDEPENDENT_CODE ON
 )
+
+# Naive end-to-end SimplePIR-shaped GEMM/GEMV mock (no CUTLASS dependency).
+add_library(simplepir_naive STATIC naive_simplepir.cu)
+target_include_directories(simplepir_naive PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(simplepir_naive PROPERTIES
+  CXX_STANDARD 17
+  CUDA_STANDARD 17
+  CUDA_SEPARABLE_COMPILATION OFF
+  POSITION_INDEPENDENT_CODE ON
+)
