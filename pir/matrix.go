@@ -6,6 +6,20 @@ import "C"
 import "fmt"
 import "math/big"
 
+// matMulVecServerHook is set by optional GPU server code (e.g. //go:build cutlass).
+// If it returns true, MatrixMulVec skips the default matMulVecBackend.
+var matMulVecServerHook func(out, a, b *Matrix) bool
+
+// matMulVecPackedServerHook is set by optional GPU Answer code (//go:build cutlass).
+// If true, MatrixMulVecPacked skips C.matMulVecPacked.
+var matMulVecPackedServerHook func(out, a, b *Matrix, basis, compression uint64) bool
+
+// packedGPUDBSyncHook runs after Database.Squish (//go:build cutlass) when resident GPU DB is enabled.
+var packedGPUDBSyncHook func(*Database)
+
+// packedGPUDBClearHook runs before Unsquish on Reset to drop device-resident squished DB.
+var packedGPUDBClearHook func()
+
 type Matrix struct {
 	Rows uint64
 	Cols uint64
@@ -111,7 +125,7 @@ func (a *Matrix) AddAt(val, i, j uint64) {
 	if (i >= a.Rows) || (j >= a.Cols) {
 		panic("Out of bounds")
 	}
-	a.Set(a.Get(i, j) + val, i, j)
+	a.Set(a.Get(i, j)+val, i, j)
 }
 
 func (a *Matrix) MatrixSub(b *Matrix) {
@@ -155,22 +169,22 @@ func MatrixMul(a *Matrix, b *Matrix) *Matrix {
 }
 
 func MatrixMulTransposedPacked(a *Matrix, b *Matrix, basis, compression uint64) *Matrix {
-        fmt.Printf("%d-by-%d vs. %d-by-%d\n", a.Rows, a.Cols, b.Cols, b.Rows)
-        if compression != 3 && basis != 10 {
-                panic("Must use hard-coded values!")
-        }
+	fmt.Printf("%d-by-%d vs. %d-by-%d\n", a.Rows, a.Cols, b.Cols, b.Rows)
+	if compression != 3 && basis != 10 {
+		panic("Must use hard-coded values!")
+	}
 
-        out := MatrixZeros(a.Rows, b.Rows)
+	out := MatrixZeros(a.Rows, b.Rows)
 
-        outPtr := (*C.Elem)(&out.Data[0])
-        aPtr := (*C.Elem)(&a.Data[0])
-        bPtr := (*C.Elem)(&b.Data[0])
-        aRows := C.size_t(a.Rows)
+	outPtr := (*C.Elem)(&out.Data[0])
+	aPtr := (*C.Elem)(&a.Data[0])
+	bPtr := (*C.Elem)(&b.Data[0])
+	aRows := C.size_t(a.Rows)
 	aCols := C.size_t(a.Cols)
-        bRows := C.size_t(b.Rows)
-        bCols := C.size_t(b.Cols)
+	bRows := C.size_t(b.Rows)
+	bCols := C.size_t(b.Cols)
 
-        C.matMulTransposedPacked(outPtr, aPtr, bPtr, aRows, aCols, bRows, bCols)
+	C.matMulTransposedPacked(outPtr, aPtr, bPtr, aRows, aCols, bRows, bCols)
 
 	return out
 }
@@ -186,13 +200,17 @@ func MatrixMulVec(a *Matrix, b *Matrix) *Matrix {
 
 	out := MatrixNew(a.Rows, 1)
 
+	if matMulVecServerHook != nil && matMulVecServerHook(out, a, b) {
+		return out
+	}
+
 	outPtr := (*C.Elem)(&out.Data[0])
 	aPtr := (*C.Elem)(&a.Data[0])
 	bPtr := (*C.Elem)(&b.Data[0])
 	aRows := C.size_t(a.Rows)
 	aCols := C.size_t(a.Cols)
 
-	C.matMulVec(outPtr, aPtr, bPtr, aRows, aCols)
+	matMulVecBackend(outPtr, aPtr, bPtr, aRows, aCols)
 
 	return out
 }
@@ -210,6 +228,11 @@ func MatrixMulVecPacked(a *Matrix, b *Matrix, basis, compression uint64) *Matrix
 	}
 
 	out := MatrixNew(a.Rows+8, 1)
+
+	if matMulVecPackedServerHook != nil && matMulVecPackedServerHook(out, a, b, basis, compression) {
+		out.DropLastRows(8)
+		return out
+	}
 
 	outPtr := (*C.Elem)(&out.Data[0])
 	aPtr := (*C.Elem)(&a.Data[0])
@@ -287,28 +310,28 @@ func (m *Matrix) Expand(mod uint64, delta uint64) {
 }
 
 func (m *Matrix) TransposeAndExpandAndConcatColsAndSquish(mod, delta, concat, basis, d uint64) {
-        if m.Rows % concat != 0 {
-                panic("Bad input!")
-        }
+	if m.Rows%concat != 0 {
+		panic("Bad input!")
+	}
 
-        n := MatrixZeros(m.Cols*delta*concat, (m.Rows/concat+d-1)/d)
+	n := MatrixZeros(m.Cols*delta*concat, (m.Rows/concat+d-1)/d)
 
-        for j := uint64(0); j < m.Rows; j++ {
-                for i := uint64(0); i < m.Cols; i++ {
-                        val := uint64(m.Data[i+j*m.Cols])
-                        for f := uint64(0); f < delta; f++ {
-                                new_val := val % mod
-                                r := (i*delta+f) + m.Cols*delta*(j % concat)
-                                c := j / concat
-                                n.Data[r*n.Cols+c/d] += C.Elem(new_val << (basis * (c%d)))
-                                val /= mod
-                        }
-                }
-        }
+	for j := uint64(0); j < m.Rows; j++ {
+		for i := uint64(0); i < m.Cols; i++ {
+			val := uint64(m.Data[i+j*m.Cols])
+			for f := uint64(0); f < delta; f++ {
+				new_val := val % mod
+				r := (i*delta + f) + m.Cols*delta*(j%concat)
+				c := j / concat
+				n.Data[r*n.Cols+c/d] += C.Elem(new_val << (basis * (c % d)))
+				val /= mod
+			}
+		}
+	}
 
-        m.Cols = n.Cols
-        m.Rows = n.Rows
-        m.Data = n.Data
+	m.Cols = n.Cols
+	m.Rows = n.Rows
+	m.Data = n.Data
 }
 
 // Computes the inverse operations of Expand(.)
@@ -332,8 +355,8 @@ func (m *Matrix) Contract(mod uint64, delta uint64) {
 }
 
 // Compresses the matrix to store it in 'packed' form.
-// Specifically, this method squishes the matrix by representing each 
-// group of 'delta' consecutive values as a single database element, 
+// Specifically, this method squishes the matrix by representing each
+// group of 'delta' consecutive values as a single database element,
 // where each value uses 'basis' bits.
 func (m *Matrix) Squish(basis, delta uint64) {
 	n := MatrixZeros(m.Rows, (m.Cols+delta-1)/delta)
@@ -472,11 +495,11 @@ func (m *Matrix) Print() {
 }
 
 func (m *Matrix) PrintStart() {
-        fmt.Printf("%d-by-%d matrix:\n", m.Rows, m.Cols)
-        for i := uint64(0); i < 2; i++ {
-                for j := uint64(0); j < 2; j++ {
-                        fmt.Printf("%d ", m.Data[i*m.Cols+j])
-                }
-                fmt.Printf("\n")
-        }
+	fmt.Printf("%d-by-%d matrix:\n", m.Rows, m.Cols)
+	for i := uint64(0); i < 2; i++ {
+		for j := uint64(0); j < 2; j++ {
+			fmt.Printf("%d ", m.Data[i*m.Cols+j])
+		}
+		fmt.Printf("\n")
+	}
 }

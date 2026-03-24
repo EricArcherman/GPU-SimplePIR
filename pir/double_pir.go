@@ -59,10 +59,10 @@ func (pi *DoublePIR) PickParamsGivenDimensions(l, m, n, logq uint64) Params {
 		N:    n,
 		Logq: logq,
 		L:    l,
-                M:    m,
+		M:    m,
 	}
-        p.PickParams(true, l, m)
-        return p
+	p.PickParams(true, l, m)
+	return p
 }
 
 func (pi *DoublePIR) GetBW(info DBinfo, p Params) {
@@ -84,18 +84,18 @@ func (pi *DoublePIR) Init(info DBinfo, p Params) State {
 }
 
 func (pi *DoublePIR) InitCompressed(info DBinfo, p Params) (State, CompressedState) {
-        seed := RandomPRGKey()
+	seed := RandomPRGKey()
 	return pi.InitCompressedSeeded(info, p, seed)
 }
 
 func (pi *DoublePIR) InitCompressedSeeded(info DBinfo, p Params, seed *PRGKey) (State, CompressedState) {
-        bufPrgReader = NewBufPRG(NewPRG(seed))
-        return pi.Init(info, p), MakeCompressedState(seed)
+	bufPrgReader = NewBufPRG(NewPRG(seed))
+	return pi.Init(info, p), MakeCompressedState(seed)
 }
 
 func (pi *DoublePIR) DecompressState(info DBinfo, p Params, comp CompressedState) State {
-        bufPrgReader = NewBufPRG(NewPRG(comp.Seed))
-        return pi.Init(info, p)
+	bufPrgReader = NewBufPRG(NewPRG(comp.Seed))
+	return pi.Init(info, p)
 }
 
 func (pi *DoublePIR) Setup(DB *Database, shared State, p Params) (State, Msg) {
@@ -112,14 +112,17 @@ func (pi *DoublePIR) Setup(DB *Database, shared State, p Params) (State, Msg) {
 	// pack the database more tightly, because the online computation is memory-bound
 	DB.Data.Add(p.P / 2)
 	DB.Squish()
+	if packedGPUDBSyncHook != nil {
+		packedGPUDBSyncHook(DB)
+	}
 
 	H1.Add(p.P / 2)
 	H1.Squish(10, 3)
 
 	A2_copy := A2.RowsDeepCopy(0, A2.Rows) // deep copy whole matrix
-	if A2_copy.Rows % 3 != 0 {
-                A2_copy.Concat(MatrixZeros(3-(A2_copy.Rows%3), A2_copy.Cols))
-        }
+	if A2_copy.Rows%3 != 0 {
+		A2_copy.Concat(MatrixZeros(3-(A2_copy.Rows%3), A2_copy.Cols))
+	}
 	A2_copy.Transpose()
 
 	return MakeState(H1, A2_copy), MakeMsg(H2)
@@ -134,13 +137,16 @@ func (pi *DoublePIR) FakeSetup(DB *Database, p Params) (State, float64) {
 	// pack the database more tightly, because the online computation is memory-bound
 	DB.Data.Add(p.P / 2)
 	DB.Squish()
+	if packedGPUDBSyncHook != nil {
+		packedGPUDBSyncHook(DB)
+	}
 
 	H1.Add(p.P / 2)
 	H1.Squish(10, 3)
 
-	A2_rows := p.L/info.X
-	if A2_rows % 3 != 0 {
-		A2_rows += (3-(A2_rows % 3))
+	A2_rows := p.L / info.X
+	if A2_rows%3 != 0 {
+		A2_rows += (3 - (A2_rows % 3))
 	}
 	A2_copy := MatrixRand(p.N, A2_rows, p.Logq, 0)
 
@@ -200,13 +206,13 @@ func (pi *DoublePIR) Answer(DB *Database, query MsgSlice, server State, shared S
 			batch_sz = DB.Data.Rows - last
 		}
 		a := MatrixMulVecPacked(DB.Data.SelectRows(last, batch_sz),
-			                q1, DB.Info.Basis, DB.Info.Squishing)
+			q1, DB.Info.Basis, DB.Info.Squishing)
 		a1.Concat(a)
 		last += batch_sz
 	}
 
 	a1.TransposeAndExpandAndConcatColsAndSquish(p.P, p.delta(), DB.Info.X, 10, 3)
-        h1 := MatrixMulTransposedPacked(a1, A2_transpose, 10, 3)
+	h1 := MatrixMulTransposedPacked(a1, A2_transpose, 10, 3)
 	msg := MakeMsg(h1)
 
 	for _, q := range query.Data {
@@ -226,38 +232,38 @@ func (pi *DoublePIR) Answer(DB *Database, query MsgSlice, server State, shared S
 func (pi *DoublePIR) Recover(i uint64, batch_index uint64, offline Msg, query Msg,
 	answer Msg, shared State, client State, p Params, info DBinfo) uint64 {
 	H2 := offline.Data[0]
-	h1 := answer.Data[0].RowsDeepCopy(0, answer.Data[0].Rows) // deep copy whole matrix 
+	h1 := answer.Data[0].RowsDeepCopy(0, answer.Data[0].Rows) // deep copy whole matrix
 	secret1 := client.Data[0]
 
-	ratio := p.P/2
+	ratio := p.P / 2
 	val1 := uint64(0)
-	for j := uint64(0); j<p.M; j++ {
-		val1 += ratio*query.Data[0].Get(j,0)
+	for j := uint64(0); j < p.M; j++ {
+		val1 += ratio * query.Data[0].Get(j, 0)
 	}
-	val1 %= (1<<p.Logq)
-	val1 = (1<<p.Logq)-val1
+	val1 %= (1 << p.Logq)
+	val1 = (1 << p.Logq) - val1
 
 	val2 := uint64(0)
-	for j := uint64(0); j<p.L/info.X; j++ {
-		val2 += ratio*query.Data[1].Get(j,0)
+	for j := uint64(0); j < p.L/info.X; j++ {
+		val2 += ratio * query.Data[1].Get(j, 0)
 	}
-	val2 %= (1<<p.Logq)
-	val2 = (1<<p.Logq)-val2
+	val2 %= (1 << p.Logq)
+	val2 = (1 << p.Logq) - val2
 
 	A2 := shared.Data[1]
 	if (A2.Cols != p.N) || (h1.Cols != p.N) {
 		panic("Should not happen!")
 	}
-	for j1 := uint64(0); j1<p.N; j1++ {
+	for j1 := uint64(0); j1 < p.N; j1++ {
 		val3 := uint64(0)
-	        for j2 := uint64(0); j2<A2.Rows; j2++ {
-			val3 += ratio*A2.Get(j2,j1)
+		for j2 := uint64(0); j2 < A2.Rows; j2++ {
+			val3 += ratio * A2.Get(j2, j1)
 		}
-		val3 %= (1<<p.Logq)
-		val3 = (1<<p.Logq)-val3
+		val3 %= (1 << p.Logq)
+		val3 = (1 << p.Logq) - val3
 		v := C.Elem(val3)
-		for k := uint64(0); k<h1.Rows; k++ {
-                	h1.Data[k*h1.Cols+j1] += v
+		for k := uint64(0); k < h1.Rows; k++ {
+			h1.Data[k*h1.Cols+j1] += v
 		}
 	}
 
@@ -296,6 +302,9 @@ func (pi *DoublePIR) Recover(i uint64, batch_index uint64, offline Msg, query Ms
 }
 
 func (pi *DoublePIR) Reset(DB *Database, p Params) {
+	if packedGPUDBClearHook != nil {
+		packedGPUDBClearHook()
+	}
 	DB.Unsquish()
 	DB.Data.Sub(p.P / 2)
 }
