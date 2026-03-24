@@ -7,6 +7,7 @@ endif()
 
 add_library(simplepir_cutlass STATIC
   cutlass_bridge.cu
+  matmul_packed_gpu.cu
 )
 
 target_include_directories(simplepir_cutlass
